@@ -18,6 +18,7 @@ import 'onBoardDataLog.dart';
 import 'ble/ble_scanner.dart';
 import 'utils/loadingDialog.dart';
 import 'utils/logDataToFile.dart';
+import 'utils/udp_streamer.dart';
 
 class WaveFormsPage extends StatefulWidget {
   WaveFormsPage({
@@ -47,9 +48,7 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
   final ppgLineData = <FlSpot>[];
   final respLineData = <FlSpot>[];
 
-  List<double> ecgDataLog = [];
-  List<double> ppgDataLog = [];
-  List<double> respDataLog = [];
+  final UDPStreamer udpStreamer = UDPStreamer();
 
   double ecgDataCounter = 0;
   double ppgDataCounter = 0;
@@ -139,6 +138,7 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
     respLineData.clear();
 
     closeAllStreams();
+    udpStreamer.close();
 
     super.dispose();
   }
@@ -329,12 +329,12 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
         ByteData ecgByteData = Uint8List.fromList(event).buffer.asByteData(0);
         Int32List ecgList = ecgByteData.buffer.asInt32List();
 
+        if (startAppLogging == true) {
+          udpStreamer.streamBatch("ECG", ecgList);
+        }
         ecgList.forEach((element) {
           setStateIfMounted(() {
             ecgLineData.add(FlSpot(ecgDataCounter++, (element.toDouble())));
-            if (startAppLogging == true) {
-              ecgDataLog.add(element.toDouble());
-            }
           });
 
           if (ecgDataCounter >= 128 * 6) {
@@ -365,12 +365,12 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
         ByteData ppgByteData = Uint8List.fromList(event).buffer.asByteData(0);
         Int16List ppgList = ppgByteData.buffer.asInt16List();
 
+        if (startAppLogging == true) {
+          udpStreamer.streamBatch("PPG", ppgList);
+        }
         ppgList.forEach((element) {
           setStateIfMounted(() {
             ppgLineData.add(FlSpot(ppgDataCounter++, (element.toDouble())));
-            if (startAppLogging == true) {
-              ppgDataLog.add(element.toDouble());
-            }
           });
 
           if (ppgDataCounter >= 128 * 3) {
@@ -398,12 +398,12 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
       (event) {
         ByteData respByteData = Uint8List.fromList(event).buffer.asByteData(0);
         Int32List respList = respByteData.buffer.asInt32List();
+        if (startAppLogging == true) {
+          udpStreamer.streamBatch("RESP", respList);
+        }
         respList.forEach((element) {
           setStateIfMounted(() {
             respLineData.add(FlSpot(respDataCounter++, (element.toDouble())));
-            if (startAppLogging == true) {
-              respDataLog.add(element.toDouble());
-            }
           });
 
           if (respDataCounter >= 256 * 6) {
@@ -1029,6 +1029,50 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
     print("sd card staus command Sent");
   }
 
+  void _showUDPSettingsDialog() {
+    TextEditingController ipController =
+        TextEditingController(text: hPi4Global.udpTargetIP);
+    TextEditingController portController =
+        TextEditingController(text: hPi4Global.udpTargetPort.toString());
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("UDP Settings"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ipController,
+              decoration: InputDecoration(labelText: "Target IP Address"),
+            ),
+            TextField(
+              controller: portController,
+              decoration: InputDecoration(labelText: "Target Port"),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                hPi4Global.udpTargetIP = ipController.text;
+                hPi4Global.udpTargetPort = int.tryParse(portController.text) ??
+                    hPi4Global.udpTargetPort;
+              });
+              Navigator.pop(context);
+            },
+            child: Text("Save"),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> setMTU(String deviceMAC) async {
     int recdMTU = await widget.fble.requestMtu(deviceId: deviceMAC, mtu: 517);
@@ -1197,8 +1241,7 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
                           } else if (startAppLogging == true &&
                               startFlashLogging == false) {
                             startAppLogging = false;
-                            writeLogDataToFile(
-                                ecgDataLog, ppgDataLog, respDataLog, context);
+                            udpStreamer.close();
                             closeAllStreams();
                             await _disconnect();
                             Navigator.of(context).pushReplacement(
@@ -1208,9 +1251,8 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
                           } else if (startFlashLogging == true &&
                               startAppLogging == true) {
                             startAppLogging = false;
+                            udpStreamer.close();
                             startFlashLogging = false;
-                            writeLogDataToFile(
-                                ecgDataLog, ppgDataLog, respDataLog, context);
                             showEndFlashingDialog();
                           } else {
                             closeAllStreams();
@@ -1283,7 +1325,7 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
           onPressed: () async {
             if (startAppLogging == true) {
               startAppLogging = false;
-              writeLogDataToFile(ecgDataLog, ppgDataLog, respDataLog, context);
+              udpStreamer.close();
             } else {
               closeAllStreams();
               await _disconnect();
@@ -1336,9 +1378,17 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
         ),
         onPressed: () async {
           if (startStreaming == true) {
-            setState(() {
-              startAppLogging = true;
-            });
+            if (startAppLogging) {
+              setState(() {
+                startAppLogging = false;
+              });
+              udpStreamer.close();
+            } else {
+              await udpStreamer.init();
+              setState(() {
+                startAppLogging = true;
+              });
+            }
           } else {
             showStopStreamingDialog("Please start streaming to log to app");
           }
@@ -1397,6 +1447,10 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
                 fit: BoxFit.fitWidth, height: 30),
             displayDeviceName(),
             displayFlashStatus(),
+            IconButton(
+              icon: Icon(Icons.settings, color: Colors.white),
+              onPressed: _showUDPSettingsDialog,
+            ),
           ]),
         ],
       );
@@ -1410,6 +1464,10 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
                 fit: BoxFit.fitWidth, height: 30),
             displayDeviceName(),
           ]),
+          IconButton(
+            icon: Icon(Icons.settings, color: Colors.white),
+            onPressed: _showUDPSettingsDialog,
+          ),
           LogToAppButton(),
           StartAndStopButton(),
           displayDisconnectButton(),

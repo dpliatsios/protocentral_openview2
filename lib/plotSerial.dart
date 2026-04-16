@@ -12,6 +12,7 @@ import 'utils/charts.dart';
 import 'utils/sizeConfig.dart';
 import 'ble/ble_scanner.dart';
 import 'utils/logDataToFile.dart';
+import 'utils/udp_streamer.dart';
 import 'states/OpenViewBLEProvider.dart';
 import 'package:flutter/src/foundation/change_notifier.dart';
 import 'protocol/protocol.dart';
@@ -43,12 +44,10 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
   final ppgLineData = <FlSpot>[];
   final respLineData = <FlSpot>[];
 
+  final UDPStreamer udpStreamer = UDPStreamer();
+
   final ecg1LineData = <FlSpot>[];
   final ecg2LineData = <FlSpot>[];
-
-  List<double> ecgDataLog = [];
-  List<double> ppgDataLog = [];
-  List<double> respDataLog = [];
 
   double ecgDataCounter = 0;
   double ppgDataCounter = 0;
@@ -116,6 +115,7 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     ]);
 
     _uiRefreshTimer?.cancel();
+    udpStreamer.close();
 
     ecgLineData.clear();
     ppgLineData.clear();
@@ -417,9 +417,16 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
       final ecgLog = decoded.ecgLogSamples ?? decoded.ecgSamples;
       final ppgLog = decoded.ppgLogSamples ?? decoded.ppgSamples;
       final respLog = decoded.respLogSamples ?? decoded.respSamples;
-      ecgDataLog.addAll(ecgLog);
-      ppgDataLog.addAll(ppgLog);
-      respDataLog.addAll(respLog);
+
+      if (ecgLog.isNotEmpty) {
+        udpStreamer.streamBatch("ECG", ecgLog);
+      }
+      if (ppgLog.isNotEmpty) {
+        udpStreamer.streamBatch("PPG", ppgLog);
+      }
+      if (respLog.isNotEmpty) {
+        udpStreamer.streamBatch("RESP", respLog);
+      }
     }
 
     if (decoded.heartRate != null) globalHeartRate = decoded.heartRate!;
@@ -453,6 +460,22 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     for (int i = 0; i < decoded.ppgSamples.length; i++) {
       if (decoded.ppgValidity != null && !decoded.ppgValidity![i]) continue;
       ppgLineData1.value.add(FlSpot(ppgDataCounter++, decoded.ppgSamples[i]));
+    }
+
+    if (startDataLogging) {
+      final ecgLog = decoded.ecgLogSamples ?? decoded.ecgSamples;
+      final ppgLog = decoded.ppgLogSamples ?? decoded.ppgSamples;
+      final respLog = decoded.respLogSamples ?? decoded.respSamples;
+
+      if (ecgLog.isNotEmpty) {
+        udpStreamer.streamBatch("ECG", ecgLog);
+      }
+      if (ppgLog.isNotEmpty) {
+        udpStreamer.streamBatch("PPG", ppgLog);
+      }
+      if (respLog.isNotEmpty) {
+        udpStreamer.streamBatch("RESP", respLog);
+      }
     }
 
     if (ecgDataCounter % updateInterval == 0) {
@@ -804,12 +827,11 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
                 if (startDataLogging == true) {
                   startDataLogging = false;
                   startEEGStreaming = false;
-                  writeLogDataToFile(ecgDataLog, ppgDataLog, respDataLog, context);
-                } else {
+                    udpStreamer.close();
+                }
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(builder: (_) => HomePage(title: 'OpenView')),
                   );
-                }
               },
               child: const Row(
                 children: <Widget>[
@@ -879,6 +901,51 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     }
   }
 
+  void _showUDPSettingsDialog() {
+    TextEditingController ipController =
+        TextEditingController(text: hPi4Global.udpTargetIP);
+    TextEditingController portController =
+        TextEditingController(text: hPi4Global.udpTargetPort.toString());
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("UDP Settings"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ipController,
+              decoration: const InputDecoration(labelText: "Target IP Address"),
+            ),
+            TextField(
+              controller: portController,
+              decoration: const InputDecoration(labelText: "Target Port"),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                hPi4Global.udpTargetIP = ipController.text;
+                hPi4Global.udpTargetPort = int.tryParse(portController.text) ??
+                    hPi4Global.udpTargetPort;
+              });
+              Navigator.pop(context);
+            },
+            child: const Text("Save"),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatusBar() {
     return Container(
       color: Colors.grey[900],
@@ -921,18 +988,30 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
                   borderRadius: BorderRadius.circular(8.0),
                 ),
                 onPressed: () async {
-                  setState(() {
-                    startDataLogging = true;
-                  });
+                  if (startDataLogging) {
+                    setState(() {
+                      startDataLogging = false;
+                    });
+                    udpStreamer.close();
+                  } else {
+                    await udpStreamer.init();
+                    setState(() {
+                      startDataLogging = true;
+                    });
+                  }
                 },
-                child: const Row(
+                child: Row(
                   children: <Widget>[
-                    Text('Start Logging',
-                        style: TextStyle(
+                    Text(startDataLogging ? 'Stop Stream' : 'Start Stream',
+                        style: const TextStyle(
                             fontSize: 16.0, color: hPi4Global.hpi4Color)),
                   ],
                 ),
               ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.settings, color: Colors.white),
+              onPressed: _showUDPSettingsDialog,
             ),
             // --- Window size dropdown removed from here ---
             displayDeviceName(),
