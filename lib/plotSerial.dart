@@ -12,7 +12,7 @@ import 'utils/charts.dart';
 import 'utils/sizeConfig.dart';
 import 'ble/ble_scanner.dart';
 import 'utils/logDataToFile.dart';
-import 'utils/udp_streamer.dart';
+import 'utils/tcp_streamer.dart';
 import 'states/OpenViewBLEProvider.dart';
 import 'package:flutter/src/foundation/change_notifier.dart';
 import 'protocol/protocol.dart';
@@ -44,7 +44,7 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
   final ppgLineData = <FlSpot>[];
   final respLineData = <FlSpot>[];
 
-  final UDPStreamer udpStreamer = UDPStreamer();
+  final TCPStreamer tcpStreamer = TCPStreamer();
 
   final ecg1LineData = <FlSpot>[];
   final ecg2LineData = <FlSpot>[];
@@ -115,7 +115,7 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     ]);
 
     _uiRefreshTimer?.cancel();
-    udpStreamer.close();
+    tcpStreamer.close();
 
     ecgLineData.clear();
     ppgLineData.clear();
@@ -419,13 +419,13 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
       final respLog = decoded.respLogSamples ?? decoded.respSamples;
 
       if (ecgLog.isNotEmpty) {
-        udpStreamer.streamBatch("ECG", ecgLog);
+        tcpStreamer.streamBatch("ECG", ecgLog);
       }
       if (ppgLog.isNotEmpty) {
-        udpStreamer.streamBatch("PPG", ppgLog);
+        tcpStreamer.streamBatch("PPG", ppgLog);
       }
       if (respLog.isNotEmpty) {
-        udpStreamer.streamBatch("RESP", respLog);
+        tcpStreamer.streamBatch("RESP", respLog);
       }
     }
 
@@ -468,13 +468,13 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
       final respLog = decoded.respLogSamples ?? decoded.respSamples;
 
       if (ecgLog.isNotEmpty) {
-        udpStreamer.streamBatch("ECG", ecgLog);
+        tcpStreamer.streamBatch("ECG", ecgLog);
       }
       if (ppgLog.isNotEmpty) {
-        udpStreamer.streamBatch("PPG", ppgLog);
+        tcpStreamer.streamBatch("PPG", ppgLog);
       }
       if (respLog.isNotEmpty) {
-        udpStreamer.streamBatch("RESP", respLog);
+        tcpStreamer.streamBatch("RESP", respLog);
       }
     }
 
@@ -827,7 +827,7 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
                 if (startDataLogging == true) {
                   startDataLogging = false;
                   startEEGStreaming = false;
-                    udpStreamer.close();
+                    tcpStreamer.close();
                 }
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(builder: (_) => HomePage(title: 'OpenView')),
@@ -901,16 +901,16 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     }
   }
 
-  void _showUDPSettingsDialog() {
+  void _showTCPSettingsDialog() {
     TextEditingController ipController =
-        TextEditingController(text: hPi4Global.udpTargetIP);
+        TextEditingController(text: hPi4Global.tcpTargetIP);
     TextEditingController portController =
-        TextEditingController(text: hPi4Global.udpTargetPort.toString());
+        TextEditingController(text: hPi4Global.tcpTargetPort.toString());
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text("UDP Settings"),
+        title: const Text("TCP Settings"),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -933,9 +933,9 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
           TextButton(
             onPressed: () {
               setState(() {
-                hPi4Global.udpTargetIP = ipController.text;
-                hPi4Global.udpTargetPort = int.tryParse(portController.text) ??
-                    hPi4Global.udpTargetPort;
+                hPi4Global.tcpTargetIP = ipController.text;
+                hPi4Global.tcpTargetPort = int.tryParse(portController.text) ??
+                    hPi4Global.tcpTargetPort;
               });
               Navigator.pop(context);
             },
@@ -992,9 +992,9 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
                     setState(() {
                       startDataLogging = false;
                     });
-                    udpStreamer.close();
+                    tcpStreamer.close();
                   } else {
-                    await udpStreamer.init();
+                    await tcpStreamer.init();
                     setState(() {
                       startDataLogging = true;
                     });
@@ -1011,7 +1011,7 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
             ),
             IconButton(
               icon: const Icon(Icons.settings, color: Colors.white),
-              onPressed: _showUDPSettingsDialog,
+              onPressed: _showTCPSettingsDialog,
             ),
             // --- Window size dropdown removed from here ---
             displayDeviceName(),

@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import '../globals.dart';
 
-class UDPStreamer {
+class TCPStreamer {
   SendPort? _sendPort;
   Isolate? _isolate;
 
@@ -11,10 +11,10 @@ class UDPStreamer {
     if (_sendPort != null) return;
 
     final receivePort = ReceivePort();
-    _isolate = await Isolate.spawn(_udpIsolate, {
+    _isolate = await Isolate.spawn(_tcpIsolate, {
       'port': receivePort.sendPort,
-      'targetIP': hPi4Global.udpTargetIP,
-      'targetPort': hPi4Global.udpTargetPort,
+      'targetIP': hPi4Global.tcpTargetIP,
+      'targetPort': hPi4Global.tcpTargetPort,
     });
 
     _sendPort = await receivePort.first as SendPort;
@@ -35,7 +35,7 @@ class UDPStreamer {
     _sendPort = null;
   }
 
-  static void _udpIsolate(Map<String, dynamic> args) async {
+  static void _tcpIsolate(Map<String, dynamic> args) async {
     final SendPort mainSendPort = args['port'];
     final String targetIP = args['targetIP'];
     final int targetPort = args['targetPort'];
@@ -43,16 +43,20 @@ class UDPStreamer {
     final commandPort = ReceivePort();
     mainSendPort.send(commandPort.sendPort);
 
-    RawDatagramSocket? socket;
+    Socket? socket;
     try {
-      socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket = await Socket.connect(targetIP, targetPort, timeout: const Duration(seconds: 5));
+      print("TCP Streamer connected to $targetIP:$targetPort");
     } catch (e) {
-      print("Failed to bind UDP socket in isolate: $e");
-      return;
+      print("Failed to connect TCP socket in isolate: $e");
+      // Still need to listen to commandPort to avoid blocking the main thread if it sends messages,
+      // or we could signal failure back. For now, we'll just consume and ignore.
     }
 
     await for (final message in commandPort) {
       if (message == null) break;
+      if (socket == null) continue;
+
       String? payload;
       if (message is String) {
         payload = message;
@@ -64,13 +68,14 @@ class UDPStreamer {
 
       if (payload != null && payload.isNotEmpty) {
         try {
-          final List<int> data = utf8.encode(payload);
-          socket.send(data, InternetAddress(targetIP), targetPort);
+          socket.write("$payload\n");
+          await socket.flush();
         } catch (e) {
-          print("Error sending UDP data from isolate: $e");
+          print("Error sending TCP data from isolate: $e");
+          break; // Exit on socket error
         }
       }
     }
-    socket.close();
+    await socket?.close();
   }
 }

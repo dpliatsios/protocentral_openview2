@@ -75,8 +75,8 @@ class hPi4Global {
 
   static const List<int> WISER_CMD_SET_DEVICE_TIME = [0x41];
 
-  static String udpTargetIP = "192.168.1.100";
-  static int udpTargetPort = 12345;
+  static String tcpTargetIP = "192.168.1.100";
+  static int tcpTargetPort = 12345;
 
   static int toInt16(Uint8List byteArray, int index) {
     ByteBuffer buffer = byteArray.buffer;
