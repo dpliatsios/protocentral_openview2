@@ -40,6 +40,8 @@ flutter build apk --release
 The resulting APK will be located at:
 `<project_root>/build/app/outputs/flutter-apk/app-release.apk`
 
+> **Note**: If you haven't configured release signing (see below), the resulting APK will be signed with a debug key.
+
 ### 4. Build an App Bundle (for Play Store)
 
 If you intend to upload to the Google Play Store, build an Android App Bundle (AABB):
@@ -50,6 +52,29 @@ flutter build appbundle
 
 The AAB will be located at:
 `<project_root>/build/app/outputs/bundle/release/app-release.aab`
+
+## Release Signing
+
+To build a properly signed release APK for distribution, you need to configure a keystore.
+
+1.  **Generate a Keystore**:
+    If you don't have one, generate a keystore using `keytool`:
+    ```bash
+    keytool -genkey -v -keystore ~/upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+    ```
+
+2.  **Create `android/key.properties`**:
+    Create a file named `key.properties` in the `android/` directory with the following content:
+    ```properties
+    storePassword=<your-store-password>
+    keyPassword=<your-key-password>
+    keyAlias=upload
+    storeFile=<path-to-your-keystore-file>
+    ```
+    *Replace the placeholders with your actual values.*
+
+3.  **Build**:
+    Now when you run `flutter build apk --release`, Gradle will use these properties to sign the APK.
 
 ## Running on Device
 
