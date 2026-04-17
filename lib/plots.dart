@@ -1055,8 +1055,36 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
         ),
         actions: [
           TextButton(
+            onPressed: () async {
+              final String ip = ipController.text.trim();
+              final int? port = int.tryParse(portController.text.trim());
+              if (ip.isEmpty || port == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Enter valid IP and Port")),
+                );
+                return;
+              }
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Testing connection...")),
+              );
+
+              final bool success = await TCPStreamer.verifyConnection(ip, port);
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(success ? "Connection Successful" : "Connection Failed"),
+                    backgroundColor: success ? Colors.green : Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Text("Test"),
+          ),
+          TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text("Cancel"),
+            child: const Text("Cancel"),
           ),
           TextButton(
             onPressed: () {

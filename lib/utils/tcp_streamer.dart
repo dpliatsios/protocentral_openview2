@@ -39,6 +39,19 @@ class TCPStreamer {
     _sendPort = null;
   }
 
+  static Future<bool> verifyConnection(String ip, int port) async {
+    try {
+      debugPrint("TCPStreamer: Testing connection to $ip:$port...");
+      final socket = await Socket.connect(ip, port, timeout: const Duration(seconds: 3));
+      await socket.close();
+      debugPrint("TCPStreamer: Test connection successful.");
+      return true;
+    } catch (e) {
+      debugPrint("TCPStreamer: Test connection failed: $e");
+      return false;
+    }
+  }
+
   static void _tcpIsolate(Map<String, dynamic> args) async {
     final SendPort mainSendPort = args['port'];
     final String targetIP = args['targetIP'];
