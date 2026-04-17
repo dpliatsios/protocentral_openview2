@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -383,6 +384,8 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     final decoded = _decoder?.decode(packet);
     if (decoded == null) return;
 
+    _logDataToConsole(decoded);
+
     final windowSize = boardSamplingRate * _plotWindowSeconds.toDouble();
     final isHpi6 = widget.selectedPortBoard == 'Healthypi 6 (USB)';
 
@@ -390,6 +393,23 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
       _handleHpi6Data(decoded, windowSize);
     } else {
       _handleStandardData(decoded, windowSize);
+    }
+  }
+
+  void _logDataToConsole(DecodedData decoded) {
+    if (Platform.isLinux) {
+      if (decoded.ecgSamples.isNotEmpty) {
+        print("ECG Samples: ${decoded.ecgSamples}");
+      }
+      if (decoded.ecg2Samples.isNotEmpty) {
+        print("ECG2 Samples: ${decoded.ecg2Samples}");
+      }
+      if (decoded.ecg3Samples.isNotEmpty) {
+        print("ECG3 Samples: ${decoded.ecg3Samples}");
+      }
+      if (decoded.ppgSamples.isNotEmpty) {
+        print("PPG Samples: ${decoded.ppgSamples}");
+      }
     }
   }
 
