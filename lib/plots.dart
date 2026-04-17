@@ -1060,14 +1060,36 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
           ),
           TextButton(
             onPressed: () {
+              final String ip = ipController.text.trim();
+              final String portStr = portController.text.trim();
+              final int? port = int.tryParse(portStr);
+
+              // Simple IP validation (IPv4)
+              final ipRegex = RegExp(
+                  r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
+
+              if (ip.isEmpty || !ipRegex.hasMatch(ip)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Invalid IP Address")),
+                );
+                return;
+              }
+
+              if (port == null || port <= 0 || port > 65535) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Invalid Port (1-65535)")),
+                );
+                return;
+              }
+
               setState(() {
-                hPi4Global.tcpTargetIP = ipController.text;
-                hPi4Global.tcpTargetPort = int.tryParse(portController.text) ??
-                    hPi4Global.tcpTargetPort;
+                hPi4Global.tcpTargetIP = ip;
+                hPi4Global.tcpTargetPort = port;
               });
+              debugPrint("TCP Settings Updated: $ip:$port");
               Navigator.pop(context);
             },
-            child: Text("Save"),
+            child: const Text("Save"),
           ),
         ],
       ),

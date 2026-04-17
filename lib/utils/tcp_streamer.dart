@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'package:flutter/foundation.dart';
 import '../globals.dart';
 
 class TCPStreamer {
@@ -10,6 +11,7 @@ class TCPStreamer {
   Future<void> init() async {
     if (_sendPort != null) return;
 
+    debugPrint("TCPStreamer: Attempting to spawn background isolate...");
     final receivePort = ReceivePort();
     _isolate = await Isolate.spawn(_tcpIsolate, {
       'port': receivePort.sendPort,
@@ -18,6 +20,7 @@ class TCPStreamer {
     });
 
     _sendPort = await receivePort.first as SendPort;
+    debugPrint("TCPStreamer: Isolate spawned and communication established.");
   }
 
   void streamBatch(String type, List<dynamic> samples) {
@@ -29,6 +32,7 @@ class TCPStreamer {
   }
 
   void close() {
+    debugPrint("TCPStreamer: Closing streamer...");
     _sendPort?.send(null); // Signal isolate to close
     _isolate?.kill(priority: Isolate.immediate);
     _isolate = null;
@@ -45,17 +49,25 @@ class TCPStreamer {
 
     Socket? socket;
     try {
+      debugPrint("TCPStreamer Isolate: Attempting connection to $targetIP:$targetPort...");
       socket = await Socket.connect(targetIP, targetPort, timeout: const Duration(seconds: 5));
-      print("TCP Streamer connected to $targetIP:$targetPort");
-    } catch (e) {
-      print("Failed to connect TCP socket in isolate: $e");
-      // Still need to listen to commandPort to avoid blocking the main thread if it sends messages,
-      // or we could signal failure back. For now, we'll just consume and ignore.
+      debugPrint("TCPStreamer Isolate: Connection established successfully.");
+    } on SocketException catch (e) {
+      debugPrint("TCPStreamer Isolate: SocketException during connection: $e");
+    } on Exception catch (e) {
+      debugPrint("TCPStreamer Isolate: Unexpected error during connection: $e");
     }
 
     await for (final message in commandPort) {
-      if (message == null) break;
-      if (socket == null) continue;
+      if (message == null) {
+        debugPrint("TCPStreamer Isolate: Received close signal.");
+        break;
+      }
+      if (socket == null) {
+        // If socket is null, we can't send data.
+        // We continue to drain the port in case it reconnects or closes.
+        continue;
+      }
 
       String? payload;
       if (message is String) {
@@ -70,12 +82,19 @@ class TCPStreamer {
         try {
           socket.write("$payload\n");
           await socket.flush();
-        } catch (e) {
-          print("Error sending TCP data from isolate: $e");
+          // debugPrint("TCPStreamer Isolate: Data sent successfully (${payload.length} chars)");
+        } on SocketException catch (e) {
+          debugPrint("TCPStreamer Isolate: SocketException during data send: $e");
           break; // Exit on socket error
+        } catch (e) {
+          debugPrint("TCPStreamer Isolate: Error sending TCP data: $e");
+          break;
         }
       }
     }
+
+    debugPrint("TCPStreamer Isolate: Cleaning up and closing socket.");
     await socket?.close();
+    socket?.destroy();
   }
 }
