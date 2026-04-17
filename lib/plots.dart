@@ -1434,10 +1434,19 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
               });
               tcpStreamer.close();
             } else {
-              await tcpStreamer.init();
-              setState(() {
-                startAppLogging = true;
-              });
+              final error = await tcpStreamer.init();
+              if (error == null) {
+                setState(() {
+                  startAppLogging = true;
+                });
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text("Stream failed to start: $error"),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
             }
           } else {
             showStopStreamingDialog("Please start streaming to log to app");

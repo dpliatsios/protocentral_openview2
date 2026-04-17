@@ -1044,10 +1044,19 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
                     });
                     tcpStreamer.close();
                   } else {
-                    await tcpStreamer.init();
-                    setState(() {
-                      startDataLogging = true;
-                    });
+                    final error = await tcpStreamer.init();
+                    if (error == null) {
+                      setState(() {
+                        startDataLogging = true;
+                      });
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text("Stream failed to start: $error"),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
                   }
                 },
                 child: Row(

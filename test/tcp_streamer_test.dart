@@ -1,37 +1,59 @@
 import 'dart:io';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:OpenView2/utils/tcp_streamer.dart';
 import 'package:OpenView2/globals.dart';
 
 void main() {
-  test('TCPStreamer connects and sends data correctly', () async {
+  test('TCPStreamer connects and sends batched data correctly', () async {
     final streamer = TCPStreamer();
 
     // Set target to localhost for testing
     hPi4Global.tcpTargetIP = '127.0.0.1';
-    hPi4Global.tcpTargetPort = 12346; // Use a different port for TCP test
+    hPi4Global.tcpTargetPort = 12350;
 
     // Create a server to verify the data
-    ServerSocket server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 12346);
+    ServerSocket server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 12350);
 
-    bool received = false;
+    List<String> receivedMessages = [];
+    final completer = Completer<void>();
+
     server.listen((Socket client) {
-      client.listen((List<int> data) {
-        String message = String.fromCharCodes(data).trim();
-        expect(message, "TEST_DATA,123");
-        received = true;
+      client.cast<List<int>>().transform(utf8.decoder).listen((message) {
+        receivedMessages.add(message.trim());
+        if (receivedMessages.length >= 2) {
+          if (!completer.isCompleted) completer.complete();
+        }
       });
     });
 
-    await streamer.init();
-    streamer.sendData("TEST_DATA,123");
+    final error = await streamer.init();
+    expect(error, isNull, reason: "Streamer should initialize without error");
 
-    // Give it a short moment to connect and receive
-    await Future.delayed(Duration(milliseconds: 200));
+    streamer.sendData("SINGLE_DATA");
+    streamer.streamBatch("BATCH", [1, 2, 3]);
 
-    expect(received, isTrue);
+    // Wait for the packets to be received with a timeout
+    await completer.future.timeout(Duration(seconds: 2)).catchError((_) {});
+
+    expect(receivedMessages, contains("SINGLE_DATA"));
+    expect(receivedMessages, contains("BATCH,1\nBATCH,2\nBATCH,3"));
 
     streamer.close();
     await server.close();
+  });
+
+  test('TCPStreamer returns error on failed connection', () async {
+    final streamer = TCPStreamer();
+
+    hPi4Global.tcpTargetIP = '127.0.0.1';
+    hPi4Global.tcpTargetPort = 9999;
+
+    final error = await streamer.init();
+    expect(error, isNotNull);
+
+    streamer.close();
   });
 }

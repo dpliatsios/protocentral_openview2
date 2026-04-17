@@ -1,30 +1,72 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../globals.dart';
 
 class TCPStreamer {
   SendPort? _sendPort;
   Isolate? _isolate;
+  ReceivePort? _receivePort;
 
-  Future<void> init() async {
-    if (_sendPort != null) return;
+  Future<String?> init() async {
+    if (_sendPort != null) return null;
 
-    debugPrint("TCPStreamer: Attempting to spawn background isolate...");
-    final receivePort = ReceivePort();
-    _isolate = await Isolate.spawn(_tcpIsolate, {
-      'port': receivePort.sendPort,
-      'targetIP': hPi4Global.tcpTargetIP,
-      'targetPort': hPi4Global.tcpTargetPort,
-    });
+    debugPrint("TCPStreamer: Initializing background isolate...");
+    _receivePort = ReceivePort();
 
-    _sendPort = await receivePort.first as SendPort;
-    debugPrint("TCPStreamer: Isolate spawned and communication established.");
+    try {
+      _isolate = await Isolate.spawn(_tcpIsolate, {
+        'port': _receivePort!.sendPort,
+        'targetIP': hPi4Global.tcpTargetIP,
+        'targetPort': hPi4Global.tcpTargetPort,
+      });
+
+      final Completer<String?> connectionCompleter = Completer<String?>();
+
+      _receivePort!.listen((message) {
+        if (message is SendPort) {
+          _sendPort = message;
+          debugPrint("TCPStreamer: Received SendPort from isolate.");
+        } else if (message == "connected") {
+          debugPrint("TCPStreamer: Isolate reported successful connection.");
+          if (!connectionCompleter.isCompleted) {
+            connectionCompleter.complete(null);
+          }
+        } else if (message is String && message.startsWith("connection_error:")) {
+          final error = message.replaceFirst("connection_error:", "").trim();
+          debugPrint("TCPStreamer: Isolate reported connection error: $error");
+          if (!connectionCompleter.isCompleted) {
+            connectionCompleter.complete(error);
+          }
+        } else if (message is String && message.startsWith("debug:")) {
+          debugPrint("TCPStreamer Isolate Debug: ${message.replaceFirst("debug:", "")}");
+        }
+      });
+
+      final result = await connectionCompleter.future.timeout(const Duration(seconds: 10), onTimeout: () {
+        return "Connection timeout";
+      });
+
+      if (result != null) {
+        close();
+      }
+      return result;
+    } catch (e) {
+      debugPrint("TCPStreamer: Error spawning isolate: $e");
+      close();
+      return e.toString();
+    }
   }
 
-  void streamBatch(String type, List<dynamic> samples) {
-    _sendPort?.send({'type': type, 'samples': samples});
+  void streamBatch(String type, List samples) {
+    if (_sendPort == null) {
+      // Throttled log could go here
+      return;
+    }
+    // Create a concrete list to avoid issues with TypedData views in Isolates
+    _sendPort?.send({'type': type, 'samples': samples.toList()});
   }
 
   void sendData(String message) {
@@ -34,20 +76,25 @@ class TCPStreamer {
   void close() {
     debugPrint("TCPStreamer: Closing streamer...");
     _sendPort?.send(null); // Signal isolate to close
-    _isolate?.kill(priority: Isolate.immediate);
-    _isolate = null;
-    _sendPort = null;
+    // Give it a tiny bit of time to handle the close signal before killing
+    Future.delayed(const Duration(milliseconds: 100), () {
+      _isolate?.kill(priority: Isolate.immediate);
+      _receivePort?.close();
+      _isolate = null;
+      _sendPort = null;
+      _receivePort = null;
+    });
   }
 
   static Future<bool> verifyConnection(String ip, int port) async {
     try {
-      debugPrint("TCPStreamer: Testing connection to $ip:$port...");
+      debugPrint("TCPStreamer: Verifying connection to $ip:$port...");
       final socket = await Socket.connect(ip, port, timeout: const Duration(seconds: 3));
       await socket.close();
-      debugPrint("TCPStreamer: Test connection successful.");
+      debugPrint("TCPStreamer: Verification successful.");
       return true;
     } catch (e) {
-      debugPrint("TCPStreamer: Test connection failed: $e");
+      debugPrint("TCPStreamer: Verification failed: $e");
       return false;
     }
   }
@@ -62,51 +109,44 @@ class TCPStreamer {
 
     Socket? socket;
     try {
-      debugPrint("TCPStreamer Isolate: Attempting connection to $targetIP:$targetPort...");
       socket = await Socket.connect(targetIP, targetPort, timeout: const Duration(seconds: 5));
-      debugPrint("TCPStreamer Isolate: Connection established successfully.");
-    } on SocketException catch (e) {
-      debugPrint("TCPStreamer Isolate: SocketException during connection: $e");
-    } on Exception catch (e) {
-      debugPrint("TCPStreamer Isolate: Unexpected error during connection: $e");
+      socket.setOption(SocketOption.tcpNoDelay, true);
+      mainSendPort.send("connected");
+    } catch (e) {
+      mainSendPort.send("connection_error: $e");
+      return;
     }
 
     await for (final message in commandPort) {
-      if (message == null) {
-        debugPrint("TCPStreamer Isolate: Received close signal.");
-        break;
-      }
-      if (socket == null) {
-        // If socket is null, we can't send data.
-        // We continue to drain the port in case it reconnects or closes.
-        continue;
-      }
+      if (message == null) break;
+      if (socket == null) continue;
 
       String? payload;
       if (message is String) {
         payload = message;
       } else if (message is Map) {
-        final String type = message['type'];
-        final List<dynamic> samples = message['samples'];
-        payload = samples.map((s) => "$type,$s").join("\n");
+        try {
+          final String type = message['type'];
+          final List samples = message['samples'];
+          payload = samples.map((s) => "$type,$s").join("\n");
+        } catch (e) {
+          mainSendPort.send("debug: Error formatting batch: $e");
+          continue;
+        }
       }
 
       if (payload != null && payload.isNotEmpty) {
         try {
           socket.write("$payload\n");
-          await socket.flush();
-          // debugPrint("TCPStreamer Isolate: Data sent successfully (${payload.length} chars)");
-        } on SocketException catch (e) {
-          debugPrint("TCPStreamer Isolate: SocketException during data send: $e");
-          break; // Exit on socket error
+          // Not awaiting flush to allow background Isolate to process messages faster,
+          // OS will handle buffering.
         } catch (e) {
-          debugPrint("TCPStreamer Isolate: Error sending TCP data: $e");
+          mainSendPort.send("debug: Send error: $e");
           break;
         }
       }
     }
 
-    debugPrint("TCPStreamer Isolate: Cleaning up and closing socket.");
     await socket?.close();
     socket?.destroy();
   }
