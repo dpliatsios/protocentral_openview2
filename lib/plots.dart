@@ -18,6 +18,7 @@ import 'onBoardDataLog.dart';
 import 'ble/ble_scanner.dart';
 import 'utils/loadingDialog.dart';
 import 'utils/logDataToFile.dart';
+import 'utils/tcp_streamer.dart';
 
 class WaveFormsPage extends StatefulWidget {
   WaveFormsPage({
@@ -47,9 +48,7 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
   final ppgLineData = <FlSpot>[];
   final respLineData = <FlSpot>[];
 
-  List<double> ecgDataLog = [];
-  List<double> ppgDataLog = [];
-  List<double> respDataLog = [];
+  final TCPStreamer tcpStreamer = TCPStreamer();
 
   double ecgDataCounter = 0;
   double ppgDataCounter = 0;
@@ -139,6 +138,7 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
     respLineData.clear();
 
     closeAllStreams();
+    tcpStreamer.close();
 
     super.dispose();
   }
@@ -329,12 +329,12 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
         ByteData ecgByteData = Uint8List.fromList(event).buffer.asByteData(0);
         Int32List ecgList = ecgByteData.buffer.asInt32List();
 
+        if (startAppLogging == true) {
+          tcpStreamer.streamBatch("ECG", ecgList);
+        }
         ecgList.forEach((element) {
           setStateIfMounted(() {
             ecgLineData.add(FlSpot(ecgDataCounter++, (element.toDouble())));
-            if (startAppLogging == true) {
-              ecgDataLog.add(element.toDouble());
-            }
           });
 
           if (ecgDataCounter >= 128 * 6) {
@@ -365,12 +365,12 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
         ByteData ppgByteData = Uint8List.fromList(event).buffer.asByteData(0);
         Int16List ppgList = ppgByteData.buffer.asInt16List();
 
+        if (startAppLogging == true) {
+          tcpStreamer.streamBatch("PPG", ppgList);
+        }
         ppgList.forEach((element) {
           setStateIfMounted(() {
             ppgLineData.add(FlSpot(ppgDataCounter++, (element.toDouble())));
-            if (startAppLogging == true) {
-              ppgDataLog.add(element.toDouble());
-            }
           });
 
           if (ppgDataCounter >= 128 * 3) {
@@ -398,12 +398,12 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
       (event) {
         ByteData respByteData = Uint8List.fromList(event).buffer.asByteData(0);
         Int32List respList = respByteData.buffer.asInt32List();
+        if (startAppLogging == true) {
+          tcpStreamer.streamBatch("RESP", respList);
+        }
         respList.forEach((element) {
           setStateIfMounted(() {
             respLineData.add(FlSpot(respDataCounter++, (element.toDouble())));
-            if (startAppLogging == true) {
-              respDataLog.add(element.toDouble());
-            }
           });
 
           if (respDataCounter >= 256 * 6) {
@@ -1029,6 +1029,100 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
     print("sd card staus command Sent");
   }
 
+  void _showTCPSettingsDialog() {
+    TextEditingController ipController =
+        TextEditingController(text: hPi4Global.tcpTargetIP);
+    TextEditingController portController =
+        TextEditingController(text: hPi4Global.tcpTargetPort.toString());
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("TCP Settings"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ipController,
+              decoration: InputDecoration(labelText: "Target IP Address"),
+            ),
+            TextField(
+              controller: portController,
+              decoration: InputDecoration(labelText: "Target Port"),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final String ip = ipController.text.trim();
+              final int? port = int.tryParse(portController.text.trim());
+              if (ip.isEmpty || port == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Enter valid IP and Port")),
+                );
+                return;
+              }
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Testing connection...")),
+              );
+
+              final bool success = await TCPStreamer.verifyConnection(ip, port);
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(success ? "Connection Successful" : "Connection Failed"),
+                    backgroundColor: success ? Colors.green : Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Text("Test"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () {
+              final String ip = ipController.text.trim();
+              final String portStr = portController.text.trim();
+              final int? port = int.tryParse(portStr);
+
+              // Simple IP validation (IPv4)
+              final ipRegex = RegExp(
+                  r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
+
+              if (ip.isEmpty || !ipRegex.hasMatch(ip)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Invalid IP Address")),
+                );
+                return;
+              }
+
+              if (port == null || port <= 0 || port > 65535) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Invalid Port (1-65535)")),
+                );
+                return;
+              }
+
+              setState(() {
+                hPi4Global.tcpTargetIP = ip;
+                hPi4Global.tcpTargetPort = port;
+              });
+              debugPrint("TCP Settings Updated: $ip:$port");
+              Navigator.pop(context);
+            },
+            child: const Text("Save"),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> setMTU(String deviceMAC) async {
     int recdMTU = await widget.fble.requestMtu(deviceId: deviceMAC, mtu: 517);
@@ -1197,8 +1291,7 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
                           } else if (startAppLogging == true &&
                               startFlashLogging == false) {
                             startAppLogging = false;
-                            writeLogDataToFile(
-                                ecgDataLog, ppgDataLog, respDataLog, context);
+                            tcpStreamer.close();
                             closeAllStreams();
                             await _disconnect();
                             Navigator.of(context).pushReplacement(
@@ -1208,9 +1301,8 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
                           } else if (startFlashLogging == true &&
                               startAppLogging == true) {
                             startAppLogging = false;
+                            tcpStreamer.close();
                             startFlashLogging = false;
-                            writeLogDataToFile(
-                                ecgDataLog, ppgDataLog, respDataLog, context);
                             showEndFlashingDialog();
                           } else {
                             closeAllStreams();
@@ -1283,7 +1375,7 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
           onPressed: () async {
             if (startAppLogging == true) {
               startAppLogging = false;
-              writeLogDataToFile(ecgDataLog, ppgDataLog, respDataLog, context);
+              tcpStreamer.close();
             } else {
               closeAllStreams();
               await _disconnect();
@@ -1336,9 +1428,26 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
         ),
         onPressed: () async {
           if (startStreaming == true) {
-            setState(() {
-              startAppLogging = true;
-            });
+            if (startAppLogging) {
+              setState(() {
+                startAppLogging = false;
+              });
+              tcpStreamer.close();
+            } else {
+              final error = await tcpStreamer.init();
+              if (error == null) {
+                setState(() {
+                  startAppLogging = true;
+                });
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text("Stream failed to start: $error"),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            }
           } else {
             showStopStreamingDialog("Please start streaming to log to app");
           }
@@ -1397,6 +1506,10 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
                 fit: BoxFit.fitWidth, height: 30),
             displayDeviceName(),
             displayFlashStatus(),
+            IconButton(
+              icon: Icon(Icons.settings, color: Colors.white),
+              onPressed: _showTCPSettingsDialog,
+            ),
           ]),
         ],
       );
@@ -1410,6 +1523,10 @@ class _WaveFormsPageState extends State<WaveFormsPage> {
                 fit: BoxFit.fitWidth, height: 30),
             displayDeviceName(),
           ]),
+          IconButton(
+            icon: Icon(Icons.settings, color: Colors.white),
+            onPressed: _showTCPSettingsDialog,
+          ),
           LogToAppButton(),
           StartAndStopButton(),
           displayDisconnectButton(),

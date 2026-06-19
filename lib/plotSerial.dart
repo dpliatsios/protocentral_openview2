@@ -12,6 +12,7 @@ import 'utils/charts.dart';
 import 'utils/sizeConfig.dart';
 import 'ble/ble_scanner.dart';
 import 'utils/logDataToFile.dart';
+import 'utils/tcp_streamer.dart';
 import 'states/OpenViewBLEProvider.dart';
 import 'package:flutter/src/foundation/change_notifier.dart';
 import 'protocol/protocol.dart';
@@ -43,12 +44,10 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
   final ppgLineData = <FlSpot>[];
   final respLineData = <FlSpot>[];
 
+  final TCPStreamer tcpStreamer = TCPStreamer();
+
   final ecg1LineData = <FlSpot>[];
   final ecg2LineData = <FlSpot>[];
-
-  List<double> ecgDataLog = [];
-  List<double> ppgDataLog = [];
-  List<double> respDataLog = [];
 
   double ecgDataCounter = 0;
   double ppgDataCounter = 0;
@@ -116,6 +115,7 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     ]);
 
     _uiRefreshTimer?.cancel();
+    tcpStreamer.close();
 
     ecgLineData.clear();
     ppgLineData.clear();
@@ -417,9 +417,16 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
       final ecgLog = decoded.ecgLogSamples ?? decoded.ecgSamples;
       final ppgLog = decoded.ppgLogSamples ?? decoded.ppgSamples;
       final respLog = decoded.respLogSamples ?? decoded.respSamples;
-      ecgDataLog.addAll(ecgLog);
-      ppgDataLog.addAll(ppgLog);
-      respDataLog.addAll(respLog);
+
+      if (ecgLog.isNotEmpty) {
+        tcpStreamer.streamBatch("ECG", ecgLog);
+      }
+      if (ppgLog.isNotEmpty) {
+        tcpStreamer.streamBatch("PPG", ppgLog);
+      }
+      if (respLog.isNotEmpty) {
+        tcpStreamer.streamBatch("RESP", respLog);
+      }
     }
 
     if (decoded.heartRate != null) globalHeartRate = decoded.heartRate!;
@@ -453,6 +460,22 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     for (int i = 0; i < decoded.ppgSamples.length; i++) {
       if (decoded.ppgValidity != null && !decoded.ppgValidity![i]) continue;
       ppgLineData1.value.add(FlSpot(ppgDataCounter++, decoded.ppgSamples[i]));
+    }
+
+    if (startDataLogging) {
+      final ecgLog = decoded.ecgLogSamples ?? decoded.ecgSamples;
+      final ppgLog = decoded.ppgLogSamples ?? decoded.ppgSamples;
+      final respLog = decoded.respLogSamples ?? decoded.respSamples;
+
+      if (ecgLog.isNotEmpty) {
+        tcpStreamer.streamBatch("ECG", ecgLog);
+      }
+      if (ppgLog.isNotEmpty) {
+        tcpStreamer.streamBatch("PPG", ppgLog);
+      }
+      if (respLog.isNotEmpty) {
+        tcpStreamer.streamBatch("RESP", respLog);
+      }
     }
 
     if (ecgDataCounter % updateInterval == 0) {
@@ -804,12 +827,11 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
                 if (startDataLogging == true) {
                   startDataLogging = false;
                   startEEGStreaming = false;
-                  writeLogDataToFile(ecgDataLog, ppgDataLog, respDataLog, context);
-                } else {
+                    tcpStreamer.close();
+                }
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(builder: (_) => HomePage(title: 'OpenView')),
                   );
-                }
               },
               child: const Row(
                 children: <Widget>[
@@ -879,6 +901,101 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
     }
   }
 
+  void _showTCPSettingsDialog() {
+    TextEditingController ipController =
+        TextEditingController(text: hPi4Global.tcpTargetIP);
+    TextEditingController portController =
+        TextEditingController(text: hPi4Global.tcpTargetPort.toString());
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("TCP Settings"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ipController,
+              decoration: const InputDecoration(labelText: "Target IP Address"),
+            ),
+            TextField(
+              controller: portController,
+              decoration: const InputDecoration(labelText: "Target Port"),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final String ip = ipController.text.trim();
+              final int? port = int.tryParse(portController.text.trim());
+              if (ip.isEmpty || port == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Enter valid IP and Port")),
+                );
+                return;
+              }
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Testing connection...")),
+              );
+
+              final bool success = await TCPStreamer.verifyConnection(ip, port);
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(success ? "Connection Successful" : "Connection Failed"),
+                    backgroundColor: success ? Colors.green : Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Text("Test"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () {
+              final String ip = ipController.text.trim();
+              final String portStr = portController.text.trim();
+              final int? port = int.tryParse(portStr);
+
+              // Simple IP validation (IPv4)
+              final ipRegex = RegExp(
+                  r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
+
+              if (ip.isEmpty || !ipRegex.hasMatch(ip)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Invalid IP Address")),
+                );
+                return;
+              }
+
+              if (port == null || port <= 0 || port > 65535) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Invalid Port (1-65535)")),
+                );
+                return;
+              }
+
+              setState(() {
+                hPi4Global.tcpTargetIP = ip;
+                hPi4Global.tcpTargetPort = port;
+              });
+              debugPrint("TCP Settings Updated: $ip:$port");
+              Navigator.pop(context);
+            },
+            child: const Text("Save"),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatusBar() {
     return Container(
       color: Colors.grey[900],
@@ -921,18 +1038,39 @@ class _PlotSerialPageState extends State<PlotSerialPage> {
                   borderRadius: BorderRadius.circular(8.0),
                 ),
                 onPressed: () async {
-                  setState(() {
-                    startDataLogging = true;
-                  });
+                  if (startDataLogging) {
+                    setState(() {
+                      startDataLogging = false;
+                    });
+                    tcpStreamer.close();
+                  } else {
+                    final error = await tcpStreamer.init();
+                    if (error == null) {
+                      setState(() {
+                        startDataLogging = true;
+                      });
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text("Stream failed to start: $error"),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  }
                 },
-                child: const Row(
+                child: Row(
                   children: <Widget>[
-                    Text('Start Logging',
-                        style: TextStyle(
+                    Text(startDataLogging ? 'Stop Stream' : 'Start Stream',
+                        style: const TextStyle(
                             fontSize: 16.0, color: hPi4Global.hpi4Color)),
                   ],
                 ),
               ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.settings, color: Colors.white),
+              onPressed: _showTCPSettingsDialog,
             ),
             // --- Window size dropdown removed from here ---
             displayDeviceName(),
